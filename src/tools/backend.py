@@ -1,6 +1,6 @@
 from typing import Optional, Union
 import requests
-from PySide6.QtCore import QFileDialog, QMainWindow
+from PySide6.QtWidgets import QFileDialog, QMainWindow
 from src.tools.commands import Commands
 
 
