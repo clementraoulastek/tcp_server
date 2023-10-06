@@ -3,7 +3,7 @@ import socket
 import sys
 from threading import Thread
 import time
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 from src.tools.backend import Backend
 
 from src.tools.commands import Commands
@@ -43,11 +43,7 @@ class Server:
                 )
                 conn_thread.start()
         except (KeyboardInterrupt, ConnectionAbortedError):
-            # Thread on kill process
-            Thread(
-                target=self.close_connection,
-                name="Close server thread",
-            ).start()
+            self.close_connection()
 
     def close_connection(self, *args) -> None:
         """
@@ -118,32 +114,33 @@ class Server:
                 header, payload = self.read_data(conn)
                 if not payload:
                     raise ConnectionAbortedError
+                
                 receiver = self.__match_username_and_address(addr, payload)
-                self.send_message_to_backend(header, payload)
+                
+                if message_id := self.send_message_to_backend(header, payload):
+                    payload = f"{message_id}:{payload}"
+                    
                 # If receiver is home, send messages to all users
                 if receiver == "home":
                     for address in self.conn_dict:
-                        if address != addr:
-                            self.send_data(
-                                self.conn_dict[address], Commands(header), payload
-                            )
-                elif receiver in self.user_dict:
-                    # Send to the receiver the message
+                        self.send_data(
+                            self.conn_dict[address], Commands(header), payload
+                        )
+                    continue
+
+                if receiver in self.user_dict:
+                    # Send to the receiver
                     self.send_data(
                         self.conn_dict[self.user_dict[receiver]],
                         Commands(header),
                         payload,
                     )
-                elif Commands(header) not in [Commands.ADD_REACT, Commands.RM_REACT]:
-                    # Send to other the new last ID
-                    for address in self.conn_dict:
-                        if address != addr:
-                            self.send_data(
-                                self.conn_dict[address],
-                                Commands.LAST_ID,
-                                "",
-                            )
-
+                # Send to the sender anyway
+                self.send_data(
+                    self.conn_dict[addr],
+                    Commands(header),
+                    payload,
+                )
                 logging.debug(f"Client {addr}: >> header: {header} payload: {payload}")
 
         except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
@@ -151,7 +148,8 @@ class Server:
         except KeyError as error:
             logging.error(error)
 
-    def send_message_to_backend(self, header: int, payload: str) -> None:
+     
+    def send_message_to_backend(self, header: int, payload: str) -> Union[None, str]:
         """
         Send message to the API
 
@@ -168,7 +166,10 @@ class Server:
             )
             response_id = payload_list[3] if len(payload_list) == 4 else 0
             receiver = receiver.replace(" ", "")
-            self.backend.send_message(sender, receiver, message, response_id)
+            response = self.backend.send_message(sender, receiver, message, response_id)
+   
+            return response["message_id"]
+            
         elif Commands(header) in [Commands.ADD_REACT, Commands.RM_REACT]:
             self._update_reaction(payload)
 
