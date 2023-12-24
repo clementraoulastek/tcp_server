@@ -1,4 +1,4 @@
-name: server-tcp-api
+name: server-tcp
 channels:
   - defaults
 dependencies:
