@@ -1,16 +1,22 @@
+"""Server class"""
+
 import logging
 import socket
 import sys
-from threading import Thread
 import time
-from typing import Dict, Optional
-from src.tools.backend import Backend
+from threading import Thread
+from typing import Dict, Optional, Union
 
+from src.tools.backend import Backend
 from src.tools.commands import Commands
 from src.tools.constant import IP_API, PORT_API
 
 
 class Server:
+    """
+    This class handle server connection, send and receive data from clients in TCP
+    """
+
     def __init__(self, host: str, port: int, conn_nb: int = 2) -> None:
         self.backend = Backend(IP_API, PORT_API)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -18,23 +24,30 @@ class Server:
         self.sock.listen(conn_nb)
         self.conn_dict: Dict[str, socket.socket] = {}
         self.user_dict: Dict[str, str] = {}
-        Thread(target=self.launch).start()
+        Thread(target=self.launch, name="Server thread").start()
 
         self.hello_world(host, port)
 
     def hello_world(self, hostname: str, port: int) -> None:
-        logging.info(f"Server is running on hostname: {hostname}, port: {port}")
+        """
+        Display server is running
+
+        Args:
+            hostname (str): hostname of the server
+            port (int): port of the server
+        """
+        logging.info("Server is running on hostname: %s, port: %s", hostname, port)
 
     def launch(self) -> None:
         """
         Launch the server
         """
-        TIME_SLEEP = 0.1
+        time_sleep = 0.1
 
         try:
             while "Server connected":
                 conn, addr = self.sock.accept()
-                time.sleep(TIME_SLEEP)
+                time.sleep(time_sleep)
                 conn_thread = Thread(
                     target=self.create_connection,
                     args=(conn, addr),
@@ -43,12 +56,9 @@ class Server:
                 )
                 conn_thread.start()
         except (KeyboardInterrupt, ConnectionAbortedError):
-            # Thread on kill process
-            Thread(
-                target=self.close_connection,
-                name="Close server thread",
-            ).start()
+            self.close_connection()
 
+    # pylint: disable=unused-argument
     def close_connection(self, *args) -> None:
         """
         Close the connection
@@ -110,7 +120,7 @@ class Server:
         """
         self.handle_new_connection(addr, conn)
 
-        logging.debug(f"Connected by {addr}")
+        logging.debug("Connected by %s", addr)
 
         # Receive the data in small chunks and retransmit it
         try:
@@ -118,40 +128,41 @@ class Server:
                 header, payload = self.read_data(conn)
                 if not payload:
                     raise ConnectionAbortedError
+
                 receiver = self.__match_username_and_address(addr, payload)
-                self.send_message_to_backend(header, payload)
+
+                if message_id := self.send_message_to_backend(header, payload):
+                    payload = f"{message_id}:{payload}"
+
                 # If receiver is home, send messages to all users
                 if receiver == "home":
-                    for address in self.conn_dict:
-                        if address != addr:
-                            self.send_data(
-                                self.conn_dict[address], Commands(header), payload
-                            )
-                elif receiver in self.user_dict:
-                    # Send to the receiver the message
+                    for socket_ in self.conn_dict.values():
+                        self.send_data(socket_, Commands(header), payload)
+                    continue
+
+                if receiver in self.user_dict:
+                    # Send to the receiver
                     self.send_data(
                         self.conn_dict[self.user_dict[receiver]],
                         Commands(header),
                         payload,
                     )
-                elif Commands(header) not in [Commands.ADD_REACT, Commands.RM_REACT]:
-                    # Send to other the new last ID
-                    for address in self.conn_dict:
-                        if address != addr:
-                            self.send_data(
-                                self.conn_dict[address],
-                                Commands.LAST_ID,
-                                "",
-                            )
-
-                logging.debug(f"Client {addr}: >> header: {header} payload: {payload}")
+                # Send to the sender anyway
+                self.send_data(
+                    self.conn_dict[addr],
+                    Commands(header),
+                    payload,
+                )
+                logging.debug(
+                    "Client %s: >> header: %s payload: %s", addr, header, payload
+                )
 
         except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
             self._display_disconnection(conn, addr)
         except KeyError as error:
             logging.error(error)
 
-    def send_message_to_backend(self, header: int, payload: str) -> None:
+    def send_message_to_backend(self, header: int, payload: str) -> Union[None, str]:
         """
         Send message to the API
 
@@ -160,17 +171,33 @@ class Server:
             payload (str): payload of the message
         """
         if Commands(header) == Commands.MESSAGE:
-            payload_list = payload.split(":")
-            sender, receiver, message = (
-                payload_list[0],
-                payload_list[1],
-                payload_list[2],
-            )
-            response_id = payload_list[3] if len(payload_list) == 4 else 0
-            receiver = receiver.replace(" ", "")
-            self.backend.send_message(sender, receiver, message, response_id)
-        elif Commands(header) in [Commands.ADD_REACT, Commands.RM_REACT]:
+            return self._send_string_message(payload)
+        if Commands(header) in [Commands.ADD_REACT, Commands.RM_REACT]:
             self._update_reaction(payload)
+
+        return None
+
+    def _send_string_message(self, payload: str) -> str:
+        """
+        Send string message to the API
+
+        Args:
+            payload (str): payload
+
+        Returns:
+            str: message_id
+        """
+        payload_list = payload.split(":")
+        sender, receiver, message = (
+            payload_list[0],
+            payload_list[1],
+            payload_list[2],
+        )
+        response_id = payload_list[3] if len(payload_list) == 4 else 0
+        receiver = receiver.replace(" ", "")
+        response = self.backend.send_message(sender, receiver, message, response_id)
+
+        return response["message_id"]
 
     def _update_reaction(self, payload: str) -> None:
         """
@@ -197,13 +224,11 @@ class Server:
         self.conn_dict[addr] = conn
 
         # Send nb of conn
-        message = f"{len(self.conn_dict)}"
+        message = str(len(self.conn_dict))
 
         # Send to all connected clients
-        for address in self.conn_dict:
-            self.send_data(
-                self.conn_dict[address], Commands.CONN_NB, message, is_from_server=True
-            )
+        for socket_ in self.conn_dict.values():
+            self.send_data(socket_, Commands.CONN_NB, message, is_from_server=True)
 
     def _display_disconnection(self, conn: socket, addr: str) -> None:
         """
@@ -225,11 +250,11 @@ class Server:
 
         already_connected = len(self.conn_dict) >= 1
         if already_connected:
-            for address in self.conn_dict:
+            for address, socket_ in self.conn_dict.items():
                 if address != addr:
-                    message = f"{len(self.conn_dict)}"
+                    message = str(len(self.conn_dict))
                     self.send_data(
-                        self.conn_dict[address],
+                        socket_,
                         Commands.CONN_NB,
                         message,
                         is_from_server=True,
