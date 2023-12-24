@@ -1,4 +1,4 @@
-# Kamas Dashboard
+# TCP server for Messenger app
 
 This repository is a TCP server for messenger application.
 
