@@ -2,7 +2,7 @@ name: server-tcp
 channels:
   - defaults
 dependencies:
-  - python=3.11.6
+  - python=3.11
   - pip
   - pip:
-    - -r file:requirements.txt
+    - -r requirements.txt
