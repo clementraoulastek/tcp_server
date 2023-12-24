@@ -1,8 +1,17 @@
+"""Module for TCP header commands"""
+
 from enum import Enum, unique
 
 
 @unique
 class Commands(Enum):
+    """
+    Enumeration of all commands
+
+    Args:
+        Enum (Enum): the enumeration
+    """
+
     MESSAGE = 0x0000
     HELLO_WORLD = 0x0001
     WELCOME = 0x0002
